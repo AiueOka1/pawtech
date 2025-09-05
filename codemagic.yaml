@@ -11,27 +11,43 @@ workflows:
         script: |
           flutter --version
           flutter pub get
+
       - name: Ensure Pods use iOS 14 and update repos
         script: |
-          export IPHONEOS_DEPLOYMENT_TARGET=14.0
-          if [ -d "ios" ]; then cd ios; elif [ -d ".ios" ]; then cd .ios; fi
+          cd ios
+          # Force Podfile to use iOS 14
+          sed -i '' 's/platform :ios, .*/platform :ios, "14.0"/g' Podfile || echo 'platform :ios, "14.0"' >> Podfile
+          
+          # Force Xcode project to use iOS 14
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9]\{1,2\}\.[0-9]\{1,2\}/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g'
+
+          # Update pods
           pod repo update
           pod install
           cd ..
+
       - name: Build iOS app (unsigned)
         script: |
           export CODE_SIGNING_ALLOWED=NO
           export CODE_SIGNING_REQUIRED=NO
           export CODE_SIGN_IDENTITY=""
           flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA
+        script: |
+          cd build/ios/iphoneos
+          rm -rf Payload && mkdir Payload
+          cp -R Runner.app Payload/
+          zip -qry Runner-unsigned.ipa Payload
+
     artifacts:
-      - build/ios/iphoneos/*.app
+      - build/ios/iphoneos/Runner-unsigned.ipa
       - /tmp/xcodebuild_logs/*.log
     
     publishing:
       email:
         recipients:
-          - somarious2@gmail.com  # Change to your email
+          - somarious2@gmail.com
         notify:
           success: true
           failure: true
@@ -71,7 +87,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - your-email@example.com  # Change to your email
+          - somarious2@gmail.com
         notify:
           success: true
           failure: true
