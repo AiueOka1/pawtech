@@ -19,12 +19,6 @@ jobs:
       - name: Precache iOS
         run: flutter precache --ios
 
-      - name: Ensure .ios host exists
-        run: |
-          if [ ! -d ".ios" ]; then
-            flutter build ios --config-only
-          fi
-
       - name: Set iOS min version to 14.0 (Podfile and project)
         run: |
           if [ -f ".ios/Podfile" ]; then
@@ -36,11 +30,9 @@ jobs:
 
       - name: CocoaPods install
         run: |
-          if [ -d ".ios" ]; then
-            cd .ios
-            pod repo update
-            pod install
-          fi
+          cd .ios
+          pod repo update
+          pod install
 
       - name: Build iOS (device, unsigned)
         shell: bash
@@ -59,6 +51,31 @@ jobs:
           fi
 
       - name: Package unsigned IPA
+        shell: bash
         run: |
-          cd build/ios/iphoneos
-          rm -
+          set -euo pipefail
+          # Locate the built .app (Flutter vs xcodebuild fallback)
+          APP_DIR=""
+          if [ -d "build/ios/iphoneos/Runner.app" ]; then
+            APP_DIR="build/ios/iphoneos/Runner.app"
+          elif [ -d "build/Runner.xcarchive/Products/Applications/Runner.app" ]; then
+            APP_DIR="build/Runner.xcarchive/Products/Applications/Runner.app"
+          else
+            echo "Runner.app not found in expected locations."
+            find build -maxdepth 4 -type d -name "Runner.app" || true
+            exit 1
+          fi
+
+          cd "$(dirname "$APP_DIR")"
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$(basename "$APP_DIR")" Payload/
+          zip -qry FlutterIpaExport-unsigned.ipa Payload
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa
+          path: |
+            build/ios/iphoneos/FlutterIpaExport-unsigned.ipa
+            build/Runner.xcarchive/Products/Applications/FlutterIpaExport-unsigned.ipa
