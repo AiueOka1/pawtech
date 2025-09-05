@@ -1,78 +1,89 @@
 workflows:
+  ios-workflow:
+    name: iOS Build - Pawtech
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      flutter: stable
+      xcode: latest
+      ios_signing:
+        distribution_type: development        # or ad_hoc / app_store
+        bundle_identifier: com.yourcompany.pawtech
+    scripts:
+      - name: Flutter deps
+        script: |
+          flutter --version
+          flutter pub get
+      - name: Build signed IPA
+        script: |
+          flutter build ipa --release
+    artifacts:
+      - build/ios/ipa/*.ipa
+
+    publishing:
+      email:
+        recipients:
+          - somarious2@gmail.com  # Change to your email
+        notify:
+          success: true
+          failure: true
+
+  # Optional: Android workflow for testing
+  android-workflow:
+    name: Android Build - Pawtech
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      android_signing:
+        - keystore_reference
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+    scripts:
+      - name: Set up Flutter
+        script: |
+          flutter doctor
+          flutter --version
+      
+      - name: Get Flutter dependencies
+        script: |
+          flutter pub get
+      
+      - name: Build Android APK
+        script: |
+          flutter build apk --release
+    
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+    
+    publishing:
+      email:
+        recipients:
+          - somarious2@gmail.com # Change to your email
+        notify:
+          success: true
+          failure: true
+
   ios-unsigned-for-altstore:
-    name: iOS Build (unsigned, for AltStore / manual signing)
+    name: iOS device build (unsigned, for AltStore)
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
       flutter: stable
       xcode: latest
     scripts:
-      - name: Flutter deps
+      - name: Deps
         script: |
           flutter --version
           flutter pub get
-          flutter precache --ios
-
-      - name: Generate ios/ platform if missing
+      - name: Build iOS (device, no code signing)
         script: |
-          if [ ! -d "ios" ]; then
-            # Pick ONE org (adjust if you prefer another reverse-DNS)
-            flutter create --platforms=ios --org com.aiueoka1 --project-name pawtech .
-          fi
-
-      - name: Force iOS 14 in ios/Podfile and install pods
-        script: |
-          set -e
-          # Ensure platform :ios, '14.0'
-          if grep -q "platform :ios" ios/Podfile; then
-            sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/" ios/Podfile
-          else
-            sed -i '' "1s;^;platform :ios, '14.0'\n;" ios/Podfile
-          fi
-          # Ensure post_install enforces deployment target
-          ruby - <<'RUBY'
-          path = 'ios/Podfile'
-          podfile = File.read(path)
-          unless podfile.include?("post_install do |installer|")
-            File.open(path, 'a') do |f|
-              f.puts <<~EOS
-              post_install do |installer|
-                installer.pods_project.targets.each do |t|
-                  t.build_configurations.each do |c|
-                    c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-                    c.build_settings['ENABLE_BITCODE'] = 'NO'
-                  end
-                end
-              end
-              EOS
-            end
-          end
-          RUBY
-          cd ios
-          pod repo update
-          pod install
-          cd ..
-
-      - name: Build (unsigned)
-        script: |
-          set -e
-          # Try Flutter unsigned build
-          if flutter build ios --release --no-codesign; then
-            echo "Flutter build (no-codesign) succeeded"
-          else
-            echo "Falling back to xcodebuild archive (unsigned)"
-            xcodebuild -workspace ios/Runner.xcworkspace \
-              -scheme Runner -configuration Release -sdk iphoneos \
-              -destination "generic/platform=iOS" \
-              -archivePath build/Runner-unsigned.xcarchive archive \
-              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_IDENTITY="" DEVELOPMENT_TEAM="" \
-              PROVISIONING_PROFILE_SPECIFIER=""
-            APP_PATH="build/Runner-unsigned.xcarchive/Products/Applications/Runner.app"
-            mkdir -p build/ios/iphoneos
-            cp -R "$APP_PATH" build/ios/iphoneos/
-          fi
-
+          export IPHONEOS_DEPLOYMENT_TARGET=14.0
+          flutter build ios --release --no-codesign
       - name: Package unsigned IPA
         script: |
           cd build/ios/iphoneos
