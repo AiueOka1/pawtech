@@ -6,20 +6,25 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
-      ios_signing:
-        distribution_type: development        # or ad_hoc / app_store
-        bundle_identifier: com.yourcompany.pawtech
     scripts:
       - name: Flutter deps
         script: |
           flutter --version
           flutter pub get
-      - name: Build signed IPA
+      - name: Ensure Pods use iOS 14 and update repos
         script: |
-          flutter build ipa --release
+          export IPHONEOS_DEPLOYMENT_TARGET=14.0
+          if [ -d "ios" ]; then cd ios; elif [ -d ".ios" ]; then cd .ios; fi
+          pod repo update
+          pod install
+          cd ..
+      - name: Build iOS app (unsigned)
+        script: |
+          flutter build ios --release
     artifacts:
-      - build/ios/ipa/*.ipa
-
+      - build/ios/iphoneos/*.app
+      - /tmp/xcodebuild_logs/*.log
+    
     publishing:
       email:
         recipients:
@@ -63,32 +68,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - somarious2@gmail.com # Change to your email
+          - your-email@example.com  # Change to your email
         notify:
           success: true
           failure: true
-
-  ios-unsigned-for-altstore:
-    name: iOS device build (unsigned, for AltStore)
-    max_build_duration: 60
-    instance_type: mac_mini_m1
-    environment:
-      flutter: stable
-      xcode: latest
-    scripts:
-      - name: Deps
-        script: |
-          flutter --version
-          flutter pub get
-      - name: Build iOS (device, no code signing)
-        script: |
-          export IPHONEOS_DEPLOYMENT_TARGET=14.0
-          flutter build ios --release --no-codesign
-      - name: Package unsigned IPA
-        script: |
-          cd build/ios/iphoneos
-          rm -rf Payload && mkdir Payload
-          cp -R Runner.app Payload/
-          zip -qry Runner-unsigned.ipa Payload
-    artifacts:
-      - build/ios/iphoneos/Runner-unsigned.ipa
