@@ -14,14 +14,13 @@ workflows:
 
       - name: Ensure Pods use iOS 14 and update repos
         script: |
-          cd ios
-          # Force Podfile to use iOS 14
-          sed -i '' 's/platform :ios, .*/platform :ios, "14.0"/g' Podfile || echo 'platform :ios, "14.0"' >> Podfile
+          cd .ios
+          # Keep single post_install; only ensure platform line is 14.0
+          sed -i '' 's/platform :ios, .*/platform :ios, "14.0"/g' Podfile || true
           
-          # Force Xcode project to use iOS 14
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9]\{1,2\}\.[0-9]\{1,2\}/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g'
+          # Bump Runner project to iOS 14.0
+          sed -i '' -E 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g' Runner.xcodeproj/project.pbxproj
 
-          # Update pods
           pod repo update
           pod install
           cd ..
