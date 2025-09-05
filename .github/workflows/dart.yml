@@ -13,31 +13,39 @@ jobs:
         with:
           channel: stable
 
-      - name: Get deps
+      - name: Flutter pub get
         run: flutter pub get
 
       - name: Precache iOS
         run: flutter precache --ios
 
-      # Optional: bump iOS min version for google_maps_flutter_ios
-      - name: Ensure iOS 14.0 min target (ephemeral .ios)
+      - name: Ensure .ios host exists
+        run: |
+          if [ ! -d ".ios" ]; then
+            flutter build ios --config-only
+          fi
+
+      - name: Set iOS min version to 14.0 (Podfile and project)
         run: |
           if [ -f ".ios/Podfile" ]; then
             sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/" .ios/Podfile || true
-            printf "\npost_install do |installer|\n  installer.pods_project.targets.each do |t|\n    t.build_configurations.each do |c|\n      c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'\n    end\n  end\nend\n" >> .ios/Podfile
+          fi
+          if [ -f ".ios/Runner.xcodeproj/project.pbxproj" ]; then
+            sed -i '' -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g" .ios/Runner.xcodeproj/project.pbxproj
           fi
 
-      # Do NOT set working-directory: ios (it doesn't exist)
-      - name: Update CocoaPods repo
-        run: pod repo update
+      - name: CocoaPods install
+        run: |
+          if [ -d ".ios" ]; then
+            cd .ios
+            pod repo update
+            pod install
+          fi
 
-      # Build for device with codesigning disabled; Flutter may not support --no-codesign on all versions,
-      # so we fall back to xcodebuild if needed.
       - name: Build iOS (device, unsigned)
         shell: bash
         run: |
           set -e
-          # Try Flutter first (may fail on some versions)
           if flutter build ios --release --no-codesign; then
             echo "Flutter build (no-codesign) succeeded"
           else
@@ -53,12 +61,4 @@ jobs:
       - name: Package unsigned IPA
         run: |
           cd build/ios/iphoneos
-          rm -rf Payload && mkdir Payload
-          cp -R Runner.app Payload/
-          zip -qry FlutterIpaExport-unsigned.ipa Payload
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-unsigned-ipa
-          path: build/ios/iphoneos/FlutterIpaExport-unsigned.ipa
+          rm -
