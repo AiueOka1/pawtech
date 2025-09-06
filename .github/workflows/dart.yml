@@ -1,16 +1,11 @@
-name: iOS-ipa-build
-
 on:
   workflow_dispatch:
 
 jobs:
   build-ios:
-    runs-on: macos-13  # Use macos-13 which has iOS 15-17 SDKs
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
-
-      - name: Select Xcode 15.2 (has iOS 15-17 SDKs)
-        run: sudo xcode-select -s /Applications/Xcode_15.2.app/Contents/Developer
 
       - uses: subosito/flutter-action@v2
         with:
