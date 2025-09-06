@@ -15,7 +15,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.24.3'
+          flutter-version: '3.35.0'  # Updated to match Dart SDK requirement
 
       - name: Flutter doctor
         run: flutter doctor -v
@@ -28,7 +28,6 @@ jobs:
 
       - name: Set iOS deployment target to 15.0
         run: |
-          # Update iOS deployment target in project settings
           if [ -f ".ios/Runner.xcodeproj/project.pbxproj" ]; then
             sed -i '' -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 15.0/g" .ios/Runner.xcodeproj/project.pbxproj
           fi
@@ -36,24 +35,15 @@ jobs:
       - name: Clean and install CocoaPods
         run: |
           cd .ios
-          # Clean existing pods
-          rm -rf Pods
-          rm -rf Podfile.lock
-          
-          # Update repo and install
+          rm -rf Pods Podfile.lock
           pod repo update
           pod install --repo-update
 
       - name: Build iOS (device, unsigned)
-        shell: bash
-        run: |
-          set -e
-          flutter build ios --release --no-codesign --verbose
+        run: flutter build ios --release --no-codesign --verbose
 
       - name: Package unsigned IPA
-        shell: bash
         run: |
-          set -euo pipefail
           cd build/ios/iphoneos
           mkdir Payload
           cp -r Runner.app Payload/
