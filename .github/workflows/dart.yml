@@ -1,3 +1,4 @@
+# filepath: .github/workflows/dart.yml
 name: iOS-ipa-build
 
 on:
@@ -19,63 +20,47 @@ jobs:
       - name: Precache iOS
         run: flutter precache --ios
 
-      - name: Set iOS min version to 14.0 (Podfile and project)
+      - name: Set iOS deployment target to 15.0
         run: |
-          if [ -f ".ios/Podfile" ]; then
-            sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/" .ios/Podfile || true
-          fi
+          # Update iOS deployment target in project settings
           if [ -f ".ios/Runner.xcodeproj/project.pbxproj" ]; then
-            sed -i '' -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g" .ios/Runner.xcodeproj/project.pbxproj
+            sed -i '' -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 15.0/g" .ios/Runner.xcodeproj/project.pbxproj
+          fi
+          
+          # Update Podfile platform
+          if [ -f ".ios/Podfile" ]; then
+            sed -i '' "s/platform :ios, '.*'/platform :ios, '15.0'/" .ios/Podfile
           fi
 
-      - name: CocoaPods install
+      - name: Clean and install CocoaPods
         run: |
           cd .ios
+          # Clean existing pods
+          rm -rf Pods
+          rm -rf Podfile.lock
+          
+          # Update repo and install
           pod repo update
-          pod install
+          pod deintegrate || true
+          pod install --repo-update
 
       - name: Build iOS (device, unsigned)
         shell: bash
         run: |
           set -e
-          if flutter build ios --release --no-codesign; then
-            echo "Flutter build (no-codesign) succeeded"
-          else
-            echo "Flutter no-codesign not supported, using xcodebuild"
-            cd .ios
-            xcodebuild -workspace Runner.xcworkspace \
-              -scheme Runner -configuration Release -sdk iphoneos \
-              -archivePath ../build/Runner.xcarchive archive \
-              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGNING_IDENTITY="" DEVELOPMENT_TEAM=""
-            cd ..
-          fi
+          flutter build ios --release --no-codesign
 
       - name: Package unsigned IPA
         shell: bash
         run: |
           set -euo pipefail
-          # Locate the built .app (Flutter vs xcodebuild fallback)
-          APP_DIR=""
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            APP_DIR="build/ios/iphoneos/Runner.app"
-          elif [ -d "build/Runner.xcarchive/Products/Applications/Runner.app" ]; then
-            APP_DIR="build/Runner.xcarchive/Products/Applications/Runner.app"
-          else
-            echo "Runner.app not found in expected locations."
-            find build -maxdepth 4 -type d -name "Runner.app" || true
-            exit 1
-          fi
-
-          cd "$(dirname "$APP_DIR")"
-          rm -rf Payload
+          cd build/ios/iphoneos
           mkdir Payload
-          cp -R "$(basename "$APP_DIR")" Payload/
-          zip -qry FlutterIpaExport-unsigned.ipa Payload
+          cp -r Runner.app Payload/
+          zip -r ../../../pawtech-unsigned.ipa Payload/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ios-unsigned-ipa
-          path: |
-            build/ios/iphoneos/FlutterIpaExport-unsigned.ipa
-            build/Runner.xcarchive/Products/Applications/FlutterIpaExport-unsigned.ipa
+          name: pawtech-unsigned-ipa
+          path: pawtech-unsigned.ipa
