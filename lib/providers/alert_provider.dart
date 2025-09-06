@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:pawtech/models/alert.dart';
-import 'package:pawtech/data/mock_data.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AlertProvider with ChangeNotifier {
   List<Alert> _alerts = [];
@@ -8,25 +8,37 @@ class AlertProvider with ChangeNotifier {
   String? _error;
 
   List<Alert> get alerts => [..._alerts];
-  List<Alert> get unreadAlerts =>
-      _alerts.where((alert) => !alert.isRead).toList();
+  List<Alert> get unreadAlerts => _alerts.where((a) => !a.isRead).toList();
   bool get isLoading => _isLoading;
   String? get error => _error;
   int get unreadCount => unreadAlerts.length;
+
+  // Firestore reference
+  final CollectionReference<Map<String, dynamic>> _col =
+      FirebaseFirestore.instance.collection('alerts');
 
   Future<void> fetchAlerts() async {
     _isLoading = true;
     _error = null;
     notifyListeners();
-
     try {
-      await Future.delayed(const Duration(seconds: 1));
-
-      _alerts = MockData.alerts;
-      _isLoading = false;
-      notifyListeners();
+      final snap = await _col.orderBy('timestamp', descending: true).get();
+      _alerts = snap.docs.map((doc) {
+        final d = doc.data();
+        return Alert(
+          id: d['id'] as String,
+          dogId: d['dogId'] as String,
+          dogName: d['dogName'] as String,
+          type: d['type'] as String,
+          message: d['message'] as String,
+          location: Map<String, dynamic>.from(d['location'] ?? {}),
+          timestamp: d['timestamp'] as String,
+          isRead: (d['isRead'] as bool?) ?? false,
+        );
+      }).toList();
     } catch (e) {
       _error = e.toString();
+    } finally {
       _isLoading = false;
       notifyListeners();
     }
@@ -34,7 +46,9 @@ class AlertProvider with ChangeNotifier {
 
   Future<void> addAlert(Alert alert) async {
     try {
-      _alerts.add(alert);
+      // Use the client-generated id so UI can reference it immediately
+      await _col.doc(alert.id).set(alert.toJson());
+      _alerts.insert(0, alert);
       notifyListeners();
     } catch (e) {
       _error = e.toString();
@@ -44,24 +58,21 @@ class AlertProvider with ChangeNotifier {
 
   Future<void> markAlertAsRead(String alertId) async {
     try {
-      final alertIndex = _alerts.indexWhere((alert) => alert.id == alertId);
-      if (alertIndex == -1) {
-        throw Exception('Alert not found');
+      await _col.doc(alertId).update({'isRead': true});
+      final i = _alerts.indexWhere((a) => a.id == alertId);
+      if (i != -1) {
+        _alerts[i] = Alert(
+          id: _alerts[i].id,
+          dogId: _alerts[i].dogId,
+          dogName: _alerts[i].dogName,
+          type: _alerts[i].type,
+          message: _alerts[i].message,
+          location: _alerts[i].location,
+          timestamp: _alerts[i].timestamp,
+          isRead: true,
+        );
+        notifyListeners();
       }
-
-      final updatedAlert = Alert(
-        id: _alerts[alertIndex].id,
-        dogId: _alerts[alertIndex].dogId,
-        dogName: _alerts[alertIndex].dogName,
-        type: _alerts[alertIndex].type,
-        message: _alerts[alertIndex].message,
-        location: _alerts[alertIndex].location,
-        timestamp: _alerts[alertIndex].timestamp,
-        isRead: true,
-      );
-
-      _alerts[alertIndex] = updatedAlert;
-      notifyListeners();
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -70,22 +81,25 @@ class AlertProvider with ChangeNotifier {
 
   Future<void> markAllAlertsAsRead() async {
     try {
-      _alerts =
-          _alerts
-              .map(
-                (alert) => Alert(
-                  id: alert.id,
-                  dogId: alert.dogId,
-                  dogName: alert.dogName,
-                  type: alert.type,
-                  message: alert.message,
-                  location: alert.location,
-                  timestamp: alert.timestamp,
-                  isRead: true,
-                ),
-              )
-              .toList();
+      final unread = _alerts.where((a) => !a.isRead).toList();
+      final batch = FirebaseFirestore.instance.batch();
+      for (final a in unread) {
+        batch.update(_col.doc(a.id), {'isRead': true});
+      }
+      await batch.commit();
 
+      _alerts = _alerts
+          .map((a) => Alert(
+                id: a.id,
+                dogId: a.dogId,
+                dogName: a.dogName,
+                type: a.type,
+                message: a.message,
+                location: a.location,
+                timestamp: a.timestamp,
+                isRead: true,
+              ))
+          .toList();
       notifyListeners();
     } catch (e) {
       _error = e.toString();
@@ -95,7 +109,8 @@ class AlertProvider with ChangeNotifier {
 
   Future<void> deleteAlert(String alertId) async {
     try {
-      _alerts.removeWhere((alert) => alert.id == alertId);
+      await _col.doc(alertId).delete();
+      _alerts.removeWhere((a) => a.id == alertId);
       notifyListeners();
     } catch (e) {
       _error = e.toString();
@@ -122,7 +137,6 @@ class AlertProvider with ChangeNotifier {
       timestamp: DateTime.now().toIso8601String(),
       isRead: false,
     );
-
     addAlert(newAlert);
   }
 
@@ -141,7 +155,6 @@ class AlertProvider with ChangeNotifier {
       timestamp: DateTime.now().toIso8601String(),
       isRead: false,
     );
-
     addAlert(newAlert);
   }
 }

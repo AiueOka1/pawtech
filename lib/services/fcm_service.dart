@@ -18,11 +18,12 @@ class FcmService {
     _inited = true;
 
     // iOS-specific initialization
+    // Note: older `onDidReceiveLocalNotification` parameter was removed.
+    // Use `onDidReceiveNotificationResponse` in _local.initialize for tap callbacks.
     const DarwinInitializationSettings iosInit = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
-      onDidReceiveLocalNotification: _onDidReceiveLocalNotification,
     );
     
     const AndroidInitializationSettings androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -148,6 +149,43 @@ class FcmService {
       details,
       payload: message.data.toString(),
     );
+
+    // Store as alert in Firestore as well
+    await _storeIncomingAlert(message);
+  }
+
+  static Future<void> _storeIncomingAlert(RemoteMessage message) async {
+    try {
+      final data = message.data;
+      final id = 'fcm_${DateTime.now().millisecondsSinceEpoch}';
+      final String dogId = (data['dogId'] ?? 'unknown').toString();
+      final String dogName =
+          (data['dogName'] ?? message.notification?.title ?? 'Unknown').toString();
+      final String type = (data['type'] ?? 'notification').toString();
+      final String msg =
+          (message.notification?.body ?? data['message'] ?? 'New notification').toString();
+
+      final double? lat = double.tryParse('${data['latitude'] ?? ''}');
+      final double? lon = double.tryParse('${data['longitude'] ?? ''}');
+      final Map<String, dynamic> location = {
+        'latitude': lat ?? 0.0,
+        'longitude': lon ?? 0.0,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+
+      await FirebaseFirestore.instance.collection('alerts').doc(id).set({
+        'id': id,
+        'dogId': dogId,
+        'dogName': dogName,
+        'type': type,
+        'message': msg,
+        'location': location,
+        'timestamp': DateTime.now().toIso8601String(),
+        'isRead': false,
+      });
+    } catch (e) {
+      debugPrint('Failed to store incoming alert: $e');
+    }
   }
 
   // Save FCM token to Firestore

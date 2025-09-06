@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:pawtech/providers/dog_provider.dart';
 import 'package:pawtech/widgets/map_placeholder.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class MapTab extends StatefulWidget {
   const MapTab({super.key});
@@ -14,6 +16,61 @@ class _MapTabState extends State<MapTab> {
   String? _selectedDogId;
   String _geofenceLocation = 'current'; // Default to current location
   double _geofenceRadius = 100.0; // Default radius
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGeofenceSettings();
+  }
+
+  Future<void> _loadGeofenceSettings() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return;
+
+      final doc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final data = doc.data();
+      final map = (data?['geofenceSettings'] as Map<String, dynamic>?) ?? {};
+      final savedLocation = map['location'] as String?;
+      final savedRadius = (map['radius'] as num?)?.toDouble();
+
+      if (!mounted) return;
+      setState(() {
+        if (savedLocation == 'current' || savedLocation == 'city_hall') {
+          _geofenceLocation = savedLocation!;
+        }
+        if (savedRadius != null && savedRadius >= 50 && savedRadius <= 2000) {
+          _geofenceRadius = savedRadius;
+        }
+      });
+    } catch (e) {
+      // Silent fail -> keep defaults
+      debugPrint('Failed to load geofence settings: $e');
+    }
+  }
+
+  Future<void> _saveGeofenceSettings() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return;
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .set(
+            {
+              'geofenceSettings': {
+                'location': _geofenceLocation,
+                'radius': _geofenceRadius,
+              }
+            },
+            SetOptions(merge: true),
+          );
+    } catch (e) {
+      debugPrint('Failed to save geofence settings: $e');
+    }
+  }
 
   void _showRadiusDialog() {
     showDialog(
@@ -32,47 +89,23 @@ class _MapTabState extends State<MapTab> {
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    'Radius: ${tempRadius.toInt()} meters',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Toggle between slider and manual input
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      ChoiceChip(
-                        label: const Text('Slider'),
-                        selected: useSlider,
-                        onSelected: (selected) {
-                          setDialogState(() {
-                            useSlider = true;
-                            // Update controller when switching to slider
-                            radiusController.text = tempRadius.toInt().toString();
-                          });
-                        },
+                      Switch(
+                        value: useSlider,
+                        onChanged: (v) => setDialogState(() => useSlider = v),
                       ),
-                      ChoiceChip(
-                        label: const Text('Manual'),
-                        selected: !useSlider,
-                        onSelected: (selected) {
-                          setDialogState(() {
-                            useSlider = false;
-                          });
-                        },
-                      ),
+                      const SizedBox(width: 8),
+                      Text(useSlider ? 'Use Slider' : 'Manual Input'),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  
-                  // Slider or Text Field based on selection
+                  const SizedBox(height: 8),
                   if (useSlider) ...[
                     Slider(
                       value: tempRadius,
                       min: 50,
-                      max: 1000,
-                      divisions: 19,
+                      max: 2000,
+                      divisions: 39,
                       label: '${tempRadius.toInt()}',
                       onChanged: (value) {
                         setDialogState(() {
@@ -122,7 +155,7 @@ class _MapTabState extends State<MapTab> {
               child: const Text('Cancel'),
             ),
             TextButton(
-              onPressed: () {
+              onPressed: () async {
                 // Validate manual input if using text field
                 if (!useSlider) {
                   final inputValue = double.tryParse(radiusController.text);
@@ -141,7 +174,8 @@ class _MapTabState extends State<MapTab> {
                 setState(() {
                   _geofenceRadius = tempRadius;
                 });
-                Navigator.of(context).pop();
+                await _saveGeofenceSettings();
+                if (context.mounted) Navigator.of(context).pop();
               },
               child: const Text('Set'),
             ),
@@ -153,92 +187,79 @@ class _MapTabState extends State<MapTab> {
 
   @override
   Widget build(BuildContext context) {
-    final dogProvider = Provider.of<DogProvider>(context);
-
-    final dogs = dogProvider.dogs;
-    final activeDogs = dogs.where((dog) => dog.isActive).toList();
+    final dogs = context.watch<DogProvider>().dogs;
 
     return Column(
       children: [
-        Container(
+        Padding(
           padding: const EdgeInsets.all(16),
-          color: Theme.of(context).cardColor,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Text(
-                'Tracking',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).primaryColor,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      decoration: InputDecoration(
-                        labelText: 'Select Dog',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                      ),
-                      value: _selectedDogId,
-                      items: [
-                        const DropdownMenuItem<String>(
-                          value: null,
-                          child: Text('All Dogs'),
-                        ),
-                        ...activeDogs.map(
-                          (dog) => DropdownMenuItem<String>(
-                            value: dog.id,
-                            child: Text(dog.name),
-                          ),
-                        ),
-                      ],
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedDogId = value;
-                        });
-                      },
+              Expanded(
+                child: DropdownButtonFormField<String?>(
+                  decoration: InputDecoration(
+                    labelText: 'Select Dog',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  ElevatedButton(
-                    onPressed: _showRadiusDialog,
-                    child: const Text('Set Radius'),
-                  ),
-                ],
+                  value: _selectedDogId,
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('All Dogs'),
+                    ),
+                    ...dogs.map(
+                      (dog) => DropdownMenuItem<String?>(
+                        value: dog.id,
+                        child: Text(dog.name),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedDogId = value;
+                    });
+                  },
+                ),
               ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Text('Geofence Location:'),
-                  const SizedBox(width: 8),
-                  DropdownButton<String>(
-                    value: _geofenceLocation,
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'current',
-                        child: Text('Current Location'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'city_hall',
-                        child: Text('City Hall Location'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setState(() {
-                        _geofenceLocation = value!;
-                      });
-                    },
+              const SizedBox(width: 16),
+              ElevatedButton(
+                onPressed: _showRadiusDialog,
+                child: const Text('Set Radius'),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              const Text('Geofence Location:'),
+              const SizedBox(width: 8),
+              DropdownButton<String>(
+                value: _geofenceLocation,
+                items: const [
+                  DropdownMenuItem(
+                    value: 'current',
+                    child: Text('Current Location'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'city_hall',
+                    child: Text('City Hall Location'),
                   ),
                 ],
+                onChanged: (value) async {
+                  if (value == null) return;
+                  setState(() {
+                    _geofenceLocation = value;
+                  });
+                  await _saveGeofenceSettings();
+                },
               ),
             ],
           ),
@@ -248,12 +269,9 @@ class _MapTabState extends State<MapTab> {
             children: [
               RealMapView(
                 selectedDogId: _selectedDogId,
-                dogs:
-                    _selectedDogId == null
-                        ? activeDogs
-                        : activeDogs
-                            .where((dog) => dog.id == _selectedDogId)
-                            .toList(),
+                dogs: _selectedDogId == null
+                    ? dogs
+                    : dogs.where((dog) => dog.id == _selectedDogId).toList(),
                 geofences: [], // 🛠 FIX: Pass empty list for now
                 geofenceLocation: _geofenceLocation,
                 geofenceRadius: _geofenceRadius,

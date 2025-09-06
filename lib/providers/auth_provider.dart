@@ -5,6 +5,7 @@ import 'package:pawtech/models/user.dart' as local_user;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 
 Future<void> fetchAndStoreFcmToken(String handlerId) async {
   try {
@@ -57,6 +58,7 @@ class AuthProvider with ChangeNotifier {
   bool _isLoading = false;
   String? _error;
   bool _isInitialized = false;
+  bool _creatingUser = false; // NEW: prevent race during registration
 
   local_user.User? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
@@ -64,34 +66,49 @@ class AuthProvider with ChangeNotifier {
   String? get error => _error;
 
   AuthProvider() {
-    _init();
+    // Ensure init runs after construction (and outside the current build phase)
+    Future.microtask(_init);
+  }
+
+  void _safeNotify() {
+    if (!hasListeners) return;
+    // Always schedule notify after the current frame to avoid setState-during-build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (hasListeners) notifyListeners();
+    });
   }
 
   Future<void> _init() async {
+    if (_isInitialized) return;
+
     if (kIsWeb) {
       await _auth.setPersistence(fb_auth.Persistence.LOCAL);
     }
 
-    await _checkCurrentUser();
+    await _checkCurrentUser(); // This will schedule notifications safely
 
     _auth.authStateChanges().listen((fb_auth.User? firebaseUser) async {
+      if (_creatingUser) return;
       if (firebaseUser == null) {
         _currentUser = null;
       } else {
         await _loadUserData(firebaseUser.uid);
       }
-      notifyListeners();
+      _safeNotify();
     });
 
     _isInitialized = true;
   }
+
+  // Remove the separate initialize() duplication (optional keep as wrapper)
+  Future<void> initialize() async => _init();
 
   Future<void> _checkCurrentUser() async {
     final firebaseUser = _auth.currentUser;
     if (firebaseUser != null) {
       await _loadUserData(firebaseUser.uid);
     }
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> _saveTokenOnRefresh() async {
@@ -109,15 +126,14 @@ class AuthProvider with ChangeNotifier {
 
   Future<void> _loadUserData(String uid) async {
     _isLoading = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      notifyListeners();
-    });
+    _safeNotify();
 
     try {
       final doc = await _firestore.collection('users').doc(uid).get();
 
       if (!doc.exists) {
-        throw Exception("User data not found");
+        debugPrint('User doc not found yet for uid=$uid (will retry later).');
+        return;
       }
 
       final data = doc.data()!;
@@ -133,39 +149,14 @@ class AuthProvider with ChangeNotifier {
         assignedDogIds: List<String>.from(data['assignedDogIds'] ?? []),
       );
 
-      // Ensure refreshed tokens are saved too
       await _saveTokenOnRefresh();
     } catch (e) {
       _error = e.toString();
-      await _auth.signOut();
-      _currentUser = null;
+      debugPrint('Load user data failed: $e');
     } finally {
       _isLoading = false;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        notifyListeners();
-      });
+      _safeNotify();
     }
-  }
-
-  Future<void> initialize() async {
-    if (_isInitialized) return;
-
-    if (kIsWeb) {
-      await _auth.setPersistence(fb_auth.Persistence.LOCAL);
-    }
-
-    await _checkCurrentUser();
-
-    _auth.authStateChanges().listen((fb_auth.User? firebaseUser) async {
-      if (firebaseUser == null) {
-        _currentUser = null;
-      } else {
-        await _loadUserData(firebaseUser.uid);
-      }
-      notifyListeners();
-    });
-
-    _isInitialized = true;
   }
 
   Future<void> _showLoginNotification() async {
@@ -187,36 +178,31 @@ class AuthProvider with ChangeNotifier {
 
   Future<bool> login(String email, String password) async {
     if (!_isInitialized) await _init();
-
     _isLoading = true;
     _error = null;
-    notifyListeners();
-
+    _safeNotify();
     try {
       final result = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
-
-      // Init local notifications and show a welcome toast
       await _initLocalNotifications();
       await _showLoginNotification();
-
-      // Ask FCM permission and save token to Firestore
-      await FirebaseMessaging.instance
-          .requestPermission(alert: true, badge: true, sound: true);
+      await FirebaseMessaging.instance.requestPermission(
+          alert: true, badge: true, sound: true);
       await fetchAndStoreFcmToken(result.user!.uid);
-
       return true;
-    } on fb_auth.FirebaseAuthException catch (e) {
+    } on fb_auth.FirebaseAuthException catch (e, st) {
+      debugPrint('FirebaseAuthException: $e\n$st');
       _error = e.message;
       return false;
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('Generic login error: $e\n$st');
       _error = e.toString();
       return false;
     } finally {
       _isLoading = false;
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -230,26 +216,25 @@ class AuthProvider with ChangeNotifier {
   ) async {
     _isLoading = true;
     _error = null;
-    notifyListeners();
-
+    _creatingUser = true;
+    _safeNotify();
     try {
       final result = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
-
       final newUser = local_user.User(
         id: result.user!.uid,
         name: name,
         email: email,
         role: 'Handler',
         department: department,
-        profileImageUrl: 'https://ui-avatars.com/api/?name=$name',
+        // force png to avoid platform image-decoding errors
+        profileImageUrl: 'https://ui-avatars.com/api/?name=${Uri.encodeComponent(name)}&format=png',
         phoneNumber: phoneNumber,
         badgeNumber: badgeNumber,
         assignedDogIds: [],
       );
-
       await _firestore.collection('users').doc(result.user!.uid).set({
         'name': name,
         'email': email,
@@ -261,14 +246,10 @@ class AuthProvider with ChangeNotifier {
         'assignedDogIds': [],
         'createdAt': FieldValue.serverTimestamp(),
       });
-
       _currentUser = newUser;
-
-      // Save FCM token right after registration
-      await FirebaseMessaging.instance
-          .requestPermission(alert: true, badge: true, sound: true);
+      await FirebaseMessaging.instance.requestPermission(
+          alert: true, badge: true, sound: true);
       await fetchAndStoreFcmToken(result.user!.uid);
-
       return true;
     } on fb_auth.FirebaseAuthException catch (e) {
       _error = e.message;
@@ -277,20 +258,27 @@ class AuthProvider with ChangeNotifier {
       _error = e.toString();
       return false;
     } finally {
+      _creatingUser = false;
       _isLoading = false;
-      notifyListeners();
+      final uid = _auth.currentUser?.uid;
+      if (uid != null) {
+        // schedule load (will safely notify)
+        _loadUserData(uid);
+      } else {
+        _safeNotify();
+      }
     }
   }
 
   Future<void> logout() async {
     await _auth.signOut();
     _currentUser = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> updateProfile(local_user.User updatedUser) async {
     _isLoading = true;
-    notifyListeners();
+    _safeNotify();
 
     try {
       await _firestore.collection('users').doc(updatedUser.id).update({
@@ -306,7 +294,7 @@ class AuthProvider with ChangeNotifier {
       _error = e.toString();
     } finally {
       _isLoading = false;
-      notifyListeners();
+      _safeNotify();
     }
   }
 }
