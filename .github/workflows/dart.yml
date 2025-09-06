@@ -5,20 +5,16 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-14
+    runs-on: macos-15  # Updated to macos-15 for iOS 17 support
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode 15.4 (supports Swift concurrency)
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+      - name: Select Xcode 16.0 (supports iOS 17 and sending keyword)
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
 
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.35.0'
-
-      - name: Flutter doctor
-        run: flutter doctor -v
 
       - name: Flutter pub get
         run: flutter pub get
@@ -26,14 +22,14 @@ jobs:
       - name: Precache iOS
         run: flutter precache --ios
 
-      - name: Set iOS deployment target to 16.0
+      - name: Set iOS deployment target to 17.0
         run: |
           if [ -f ".ios/Runner.xcodeproj/project.pbxproj" ]; then
-            sed -i '' -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 16.0/g" .ios/Runner.xcodeproj/project.pbxproj
+            sed -i '' -E "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9]+\.[0-9]+/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g" .ios/Runner.xcodeproj/project.pbxproj
           fi
           
           if [ -f ".ios/Podfile" ]; then
-            sed -i '' "s/platform :ios, '.*'/platform :ios, '16.0'/" .ios/Podfile
+            sed -i '' "s/platform :ios, '.*'/platform :ios, '17.0'/" .ios/Podfile
           fi
 
       - name: Clean and install CocoaPods
@@ -44,10 +40,15 @@ jobs:
           pod install --repo-update
 
       - name: Build iOS (device, unsigned)
-        run: flutter build ios --release --no-codesign --verbose
+        shell: bash
+        run: |
+          set -e
+          flutter build ios --release --no-codesign
 
       - name: Package unsigned IPA
+        shell: bash
         run: |
+          set -euo pipefail
           cd build/ios/iphoneos
           mkdir Payload
           cp -r Runner.app Payload/
